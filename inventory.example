@@ -1,2 +1,2 @@
 [lilypad]
-192.168.64.2 remote_user=ubuntu
+192.168.64.2 ansible_user=ubuntu
