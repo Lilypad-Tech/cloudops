@@ -10,3 +10,44 @@
     - geerlingguy.docker
     - geerlingguy.nodejs
     - gantsign.golang
+
+  tasks:
+    - name: Create Lilypad user
+      ansible.builtin.user:
+        name: lilypad
+        state: present
+        shell: /bin/bash
+        groups: docker,sudo
+        createhome: yes
+        home: /home/lilypad
+  
+    - name: Create Lilypad folder
+      ansible.builtin.file:
+        path: /opt/lilypad
+        state: directory
+        owner: lilypad
+        group: lilypad
+        mode: 0755
+
+    - name: Check out Lilypad code
+      ansible.builtin.git:
+        repo: https://github.com/bacalhau-project/lilypad
+        dest: /opt/lilypad
+        version: main
+        force: false
+      become: true
+      become_user: lilypad
+
+    - name: Install necessary packages
+      package:
+        name: ssh-askpass
+        state: present
+
+    - name: Initialise Lilypad config/env file
+      ansible.builtin.shell:
+        cmd: "./stack boot"
+        chdir: "/opt/lilypad"
+        creates: "/opt/lilypad/.env"
+        executable: /bin/bash
+      become: true
+      become_user: lilypad
