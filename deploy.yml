@@ -3,6 +3,10 @@
   hosts: lilypad
   become: true
 
+  vars:
+    nodejs_version: "20.x"
+
   roles:
     - geerlingguy.docker
+    - geerlingguy.nodejs
     - gantsign.golang

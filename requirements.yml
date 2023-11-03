@@ -1,4 +1,5 @@
 ---
 roles:
   - name: geerlingguy.docker
+  - name: geerlingguy.nodejs
   - name: gantsign.golang
