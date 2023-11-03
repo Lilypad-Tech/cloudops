@@ -1,0 +1,8 @@
+---
+- name: Deploy Lilypad Infrastructure
+  hosts: lilypad
+  become: true
+
+  roles:
+    - geerlingguy.docker
+    - gantsign.golang
