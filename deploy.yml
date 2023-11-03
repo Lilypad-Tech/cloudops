@@ -44,10 +44,18 @@
         state: present
 
     - name: Initialise Lilypad config/env file
-      ansible.builtin.shell:
+      ansible.builtin.command:
         cmd: "./stack boot"
         chdir: "/opt/lilypad"
         creates: "/opt/lilypad/.env"
         executable: /bin/bash
+      become: true
+      become_user: lilypad
+
+    - name: Build Lilypad
+      ansible.builtin.command:
+        cmd: "go build ."
+        chdir: "/opt/lilypad"
+        creates: "/opt/lilypad/lilypad"
       become: true
       become_user: lilypad
