@@ -6,6 +6,11 @@
   vars:
     nodejs_version: "20.x"
 
+  environment:
+    PATH: "/opt/go/1.21.1/bin:{{ ansible_env.PATH }}"
+    GOROOT: "/opt/go/1.21.1"
+    GOPATH: "/opt/go/1.21.1/bin"
+    
   roles:
     - geerlingguy.docker
     - geerlingguy.nodejs
@@ -20,10 +25,27 @@
         groups: docker,sudo
         createhome: yes
         home: /home/lilypad
-  
+
+    - name: Ensure lilypad user has permissions for /app directory
+      ansible.builtin.file:
+        path: /app
+        state: directory
+        owner: lilypad
+        group: lilypad
+        mode: '0755'
+      become: true
+
+    - name: Give lilypad passwordless sudo
+      lineinfile:
+        path: /etc/sudoers
+        state: present
+        regexp: '^lilypad'
+        line: 'lilypad ALL=(ALL) NOPASSWD:ALL'
+        validate: 'visudo -cf %s'
+
     - name: Create Lilypad folder
       ansible.builtin.file:
-        path: /opt/lilypad
+        path: /app/lilypad
         state: directory
         owner: lilypad
         group: lilypad
@@ -32,7 +54,7 @@
     - name: Check out Lilypad code
       ansible.builtin.git:
         repo: https://github.com/bacalhau-project/lilypad
-        dest: /opt/lilypad
+        dest: /app/lilypad
         version: main
         force: false
       become: true
@@ -43,19 +65,187 @@
         name: ssh-askpass
         state: present
 
+    - name: Yarn GPG
+      apt_key:
+        url: https://dl.yarnpkg.com/debian/pubkey.gpg
+        state: present
+
+    - name: Importing Yarn Package
+      copy:
+        content: "deb https://dl.yarnpkg.com/debian/ stable main"
+        dest: /etc/apt/sources.list.d/yarn.list
+
+    - name: Installing Yarn
+      apt:
+        name:
+          - yarn
+        update_cache: true
+
+    - name: Yarn Install Hardhat
+      ansible.builtin.shell:
+        cmd: "/usr/bin/yarn install"
+        chdir: "/app/lilypad/hardhat"
+
+    - name: Ensure the script is executable
+      ansible.builtin.file:
+        path: "/app/lilypad/stack"
+        mode: 'u+x'
+      become: true
+      become_user: lilypad
+
     - name: Initialise Lilypad config/env file
+      ansible.builtin.shell:
+        cmd: "./stack print-env > .env"
+        chdir: "/app/lilypad"
+        # creates: "/app/lilypad/.env"
+      become: true
+      become_user: lilypad
+      register: print_env_output
+      failed_when: print_env_output.rc not in [0, 1]
+
+    - name: Debug print_env command
+      ansible.builtin.debug:
+        msg: "{{ print_env_output }}"
+      when: print_env_output.failed
+
+    - name: Boot Lilypad stack
       ansible.builtin.command:
         cmd: "./stack boot"
-        chdir: "/opt/lilypad"
-        creates: "/opt/lilypad/.env"
+        chdir: "/app/lilypad"
         executable: /bin/bash
       become: true
       become_user: lilypad
 
-    - name: Build Lilypad
+    - name: Find systemd unit files on Lilypad server
+      ansible.builtin.find:
+        paths: "/app/lilypad/ops/systemd"
+        patterns: "*.service"
+      register: systemd_files
+
+    - name: Copy systemd unit files for Lilypad
+      ansible.builtin.copy:
+        src: "{{ item.path }}"
+        dest: "/etc/systemd/system/"
+        remote_src: yes
+        mode: '0644'
+      with_items: "{{ systemd_files.files }}"
+      notify: Reload systemd
+
+    - name: Change directory to /app/lilypad and build the project
+      ansible.builtin.shell:
+        cmd: go build -buildvcs=false .
+        chdir: /app/lilypad
+
+    - name: Move the Lilypad binary to /usr/bin
       ansible.builtin.command:
-        cmd: "go build ."
-        chdir: "/opt/lilypad"
-        creates: "/opt/lilypad/lilypad"
-      become: true
-      become_user: lilypad
+        cmd: mv /app/lilypad/lilypad /usr/bin/lilypad
+      become: yes
+
+    - name: Download Bacalhau binary archive
+      ansible.builtin.get_url:
+        url: "https://github.com/bacalhau-project/bacalhau/releases/download/v1.0.3/bacalhau_v1.0.3_linux_amd64.tar.gz"
+        dest: "/tmp/bacalhau_v1.0.3_linux_amd64.tar.gz"
+        mode: '0644'
+
+    - name: Extract Bacalhau binary
+      ansible.builtin.unarchive:
+        src: "/tmp/bacalhau_v1.0.3_linux_amd64.tar.gz"
+        dest: "/tmp/"
+        remote_src: yes
+
+    - name: Move Bacalhau binary to /usr/bin
+      ansible.builtin.command:
+        cmd: mv /tmp/bacalhau /usr/bin/bacalhau
+      become: yes
+
+    - name: Create IPFS data directory
+      ansible.builtin.file:
+        path: /app/data/ipfs
+        state: directory
+        owner: "{{ ansible_user_id }}"
+        group: "{{ ansible_user_gid }}"
+        mode: '0755'
+      become: yes
+
+    - name: Change ownership of /app/data
+      ansible.builtin.file:
+        path: /app/data
+        owner: "{{ ansible_user_id }}"
+        group: "{{ ansible_user_gid }}"
+        recurse: yes
+      become: yes
+    
+    - name: Start Bacalhau service
+      ansible.builtin.systemd:
+        name: bacalhau
+        state: started
+        enabled: yes
+
+    - name: Read .env file
+      ansible.builtin.slurp:
+        src: /app/lilypad/.env
+      register: dot_env
+
+    - name: Decode .env content
+      set_fact:
+        env_content: "{{ dot_env['content'] | b64decode }}"
+
+    - name: Extract RESOURCE_PROVIDER_PRIVATE_KEY
+      set_fact:
+        resource_provider_private_key: "{{ env_content | regex_findall('RESOURCE_PROVIDER_PRIVATE_KEY=([^\n\r]+)') | first }}"
+
+    - name: Save RESOURCE_PROVIDER_PRIVATE_KEY
+      ansible.builtin.copy:
+        dest: /app/lilypad/resource-provider.env
+        content: "WEB3_PRIVATE_KEY={{ resource_provider_private_key }}"
+        owner: lilypad
+        group: lilypad
+        mode: '0644'
+
+    - name: Extract MEDIATOR_PRIVATE_KEY
+      set_fact:
+        mediator_private_key: "{{ env_content | regex_findall('MEDIATOR_PRIVATE_KEY=([^\n\r]+)') | first }}"
+
+    - name: Save MEDIDATOR_PRIVATE_KEY
+      ansible.builtin.copy:
+        dest: /app/lilypad/mediator.env
+        content: "WEB3_PRIVATE_KEY={{ resource_provider_private_key }}"
+        owner: lilypad
+        group: lilypad
+        mode: '0644'
+
+    - name: Extract SOLVER_PRIVATE_KEY
+      set_fact:
+        solver_private_key: "{{ env_content | regex_findall('SOLVER_PRIVATE_KEY=([^\n\r]+)') | first }}"
+
+    - name: Save SOLVER_PRIVATE_KEY
+      ansible.builtin.copy:
+        dest: /app/lilypad/solver.env
+        content: "WEB3_PRIVATE_KEY={{ resource_provider_private_key }}"
+        owner: lilypad
+        group: lilypad
+        mode: '0644'
+
+    - name: Start Solver service
+      ansible.builtin.systemd:
+        name: solver
+        state: started
+        enabled: yes
+
+    - name: Start Mediator service
+      ansible.builtin.systemd:
+        name: mediator
+        state: started
+        enabled: yes
+
+    - name: Start Resource Provider service
+      ansible.builtin.systemd:
+        name: resource-provider
+        state: started
+        enabled: yes
+
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: yes
+
