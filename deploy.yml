@@ -194,10 +194,21 @@
       set_fact:
         resource_provider_private_key: "{{ env_content | regex_findall('RESOURCE_PROVIDER_PRIVATE_KEY=([^\n\r]+)') | first }}"
 
+    - name: Extract SOLVER_ADDRESS
+      set_fact:
+        solver_address: "{{ env_content | regex_findall('SOLVER_ADDRESS=([^\n\r]+)') | first }}"
+
+    - name: Extract MEDIATOR_ADDRESS
+      set_fact:
+        mediator_address: "{{ env_content | regex_findall('MEDIATOR_ADDRESS=([^\n\r]+)') | first }}"
+
     - name: Save RESOURCE_PROVIDER_PRIVATE_KEY
       ansible.builtin.copy:
         dest: /app/lilypad/resource-provider.env
-        content: "WEB3_PRIVATE_KEY={{ resource_provider_private_key }}"
+        content: |
+          WEB3_PRIVATE_KEY={{ resource_provider_private_key }}
+          SERVICE_SOLVER={{ solver_address }}
+          SERVICE_MEDIATORS={{ mediator_address }}
         owner: lilypad
         group: lilypad
         mode: '0644'
@@ -206,10 +217,21 @@
       set_fact:
         mediator_private_key: "{{ env_content | regex_findall('MEDIATOR_PRIVATE_KEY=([^\n\r]+)') | first }}"
 
+    - name: Extract DIRECTORY_ADDRESS
+      set_fact:
+        directory_address: "{{ env_content | regex_findall('DIRECTORY_ADDRESS=([^\n\r]+)') | first }}"
+
+    - name: Extract SOLVER_ADDRESS
+      set_fact:
+        solver_address: "{{ env_content | regex_findall('SOLVER_ADDRESS=([^\n\r]+)') | first }}"
+
     - name: Save MEDIDATOR_PRIVATE_KEY
       ansible.builtin.copy:
         dest: /app/lilypad/mediator.env
-        content: "WEB3_PRIVATE_KEY={{ resource_provider_private_key }}"
+        content: |
+          WEB3_PRIVATE_KEY={{ mediator_private_key }}
+          WEB3_DIRECTORY_ADDRESS={{ directory_address }}
+          SERVICE_SOLVER={{ solver_address }}
         owner: lilypad
         group: lilypad
         mode: '0644'
@@ -217,11 +239,18 @@
     - name: Extract SOLVER_PRIVATE_KEY
       set_fact:
         solver_private_key: "{{ env_content | regex_findall('SOLVER_PRIVATE_KEY=([^\n\r]+)') | first }}"
+        
+    - name: Extract JOB_CREATOR_ADDRESS
+      set_fact:
+        job_creator_address: "{{ env_content | regex_findall('JOB_CREATOR_ADDRESS=([^\n\r]+)') | first }}"
 
-    - name: Save SOLVER_PRIVATE_KEY
+    - name: Save SOLVER_PRIVATE_KEY with additional variables
       ansible.builtin.copy:
         dest: /app/lilypad/solver.env
-        content: "WEB3_PRIVATE_KEY={{ resource_provider_private_key }}"
+        content: |
+          WEB3_PRIVATE_KEY={{ solver_private_key }}
+          JOB_CREATOR_ADDRESS={{ job_creator_address }}
+          SERVICE_MEDIATORS={{ mediator_address }}
         owner: lilypad
         group: lilypad
         mode: '0644'

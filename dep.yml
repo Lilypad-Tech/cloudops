@@ -1,0 +1,37 @@
+---
+- name: Deploy Lilypad Infrastructure
+  hosts: lilypad
+  become: true
+
+  tasks:
+    - name: Read .env file
+      ansible.builtin.slurp:
+        src: /app/lilypad/.env
+      register: dot_env
+
+    - name: Decode .env content
+      set_fact:
+        env_content: "{{ dot_env['content'] | b64decode }}"
+
+    - name: Extract SOLVER_PRIVATE_KEY
+      set_fact:
+        solver_private_key: "{{ env_content | regex_findall('SOLVER_PRIVATE_KEY=([^\n\r]+)') | first }}"
+        
+    - name: Extract JOB_CREATOR_ADDRESS
+      set_fact:
+        job_creator_address: "{{ env_content | regex_findall('JOB_CREATOR_ADDRESS=([^\n\r]+)') | first }}"
+
+    - name: Extract MEDIATOR_ADDRESS
+      set_fact:
+        mediator_address: "{{ env_content | regex_findall('MEDIATOR_ADDRESS=([^\n\r]+)') | first }}"
+
+    - name: Save SOLVER_PRIVATE_KEY with additional variables
+      ansible.builtin.copy:
+        dest: /app/lilypad/solver.env
+        content: |
+          WEB3_PRIVATE_KEY={{ solver_private_key }}
+          JOB_CREATOR_ADDRESS={{ job_creator_address }}
+          SERVICE_MEDIATORS={{ mediator_address }}
+        owner: lilypad
+        group: lilypad
+        mode: '0644'
