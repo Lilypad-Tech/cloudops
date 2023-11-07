@@ -17,6 +17,12 @@
     - gantsign.golang
 
   tasks:
+    - name: If we are running on an ARM64 machine, add amd64 emulation compatibility
+      ansible.builtin.command:
+        cmd: docker run --privileged --rm tonistiigi/binfmt --install amd64
+      when: ansible_architecture == "aarch64"
+      become: true
+
     - name: Create Lilypad user
       ansible.builtin.user:
         name: lilypad
@@ -97,7 +103,7 @@
       ansible.builtin.shell:
         cmd: "./stack print-env > .env"
         chdir: "/app/lilypad"
-        # creates: "/app/lilypad/.env"
+        creates: "/app/lilypad/.env"
       become: true
       become_user: lilypad
       register: print_env_output
@@ -131,32 +137,37 @@
       with_items: "{{ systemd_files.files }}"
       notify: Reload systemd
 
-    - name: Change directory to /app/lilypad and build the project
-      ansible.builtin.shell:
-        cmd: go build -buildvcs=false .
-        chdir: /app/lilypad
-
-    - name: Move the Lilypad binary to /usr/bin
-      ansible.builtin.command:
-        cmd: mv /app/lilypad/lilypad /usr/bin/lilypad
-      become: yes
-
-    - name: Download Bacalhau binary archive
+    - name: Download Lilypad binaries
       ansible.builtin.get_url:
-        url: "https://github.com/bacalhau-project/bacalhau/releases/download/v1.0.3/bacalhau_v1.0.3_linux_amd64.tar.gz"
-        dest: "/tmp/bacalhau_v1.0.3_linux_amd64.tar.gz"
-        mode: '0644'
+        url: "https://github.com/bacalhau-project/lilypad/releases/download/v2.0.0-6afc1cc-multiarch/lilypad-linux-{{ 'amd64' if ansible_architecture == 'x86_64' else 'arm64' if ansible_architecture == 'aarch64' else ansible_fail('Unsupported architecture') }}"
+        dest: "/usr/bin/lilypad"
+        mode: '0755'
+        owner: root
+        group: root
 
-    - name: Extract Bacalhau binary
+    - name: Download Bacalhau binary archive for amd64 or arm64
+      ansible.builtin.get_url:
+        url: "https://github.com/bacalhau-project/bacalhau/releases/download/v1.0.3/bacalhau_v1.0.3_linux_{{ 'amd64' if ansible_architecture == 'x86_64' else 'arm64' if ansible_architecture == 'aarch64' else ansible_fail('Unsupported architecture') }}.tar.gz"
+        dest: "/tmp/bacalhau_v1.0.3_linux.tar.gz"
+        mode: '0644'
+      when: ansible_architecture in ['x86_64', 'aarch64']
+
+    - name: Extract Bacalhau binary for amd64 or arm64
       ansible.builtin.unarchive:
-        src: "/tmp/bacalhau_v1.0.3_linux_amd64.tar.gz"
+        src: "/tmp/bacalhau_v1.0.3_linux.tar.gz"
         dest: "/tmp/"
         remote_src: yes
+      when: ansible_architecture in ['x86_64', 'aarch64']
 
     - name: Move Bacalhau binary to /usr/bin
-      ansible.builtin.command:
-        cmd: mv /tmp/bacalhau /usr/bin/bacalhau
-      become: yes
+      ansible.builtin.copy:
+        src: /tmp/bacalhau
+        dest: /usr/bin/bacalhau
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0755'
+      become: true
 
     - name: Create IPFS data directory
       ansible.builtin.file:
