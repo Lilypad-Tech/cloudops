@@ -61,7 +61,7 @@
       ansible.builtin.git:
         repo: https://github.com/bacalhau-project/lilypad
         dest: /app/lilypad
-        version: main
+        version: testnet-sepolia
         force: false
       become: true
       become_user: lilypad
@@ -235,6 +235,8 @@
           WEB3_PRIVATE_KEY={{ solver_private_key }}
           JOB_CREATOR_ADDRESS={{ job_creator_address }}
           SERVICE_MEDIATORS={{ mediator_address }}
+          WEB3_CHAIN_ID=11155111
+          WEB3_CONTROLLER_ADDRESS=0x433C91FA54b9c11550b07672E1FA2b06860e5b05
         owner: lilypad
         group: lilypad
         mode: '0644'
