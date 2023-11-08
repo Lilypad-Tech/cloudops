@@ -66,6 +66,14 @@
       become: true
       become_user: lilypad
 
+    - name: Install .env file for chosen network
+      ansible.builtin.copy:
+        src: ".env"
+        dest: /app/lilypad/.env
+        owner: lilypad
+        group: lilypad
+        mode: '0644'
+
     - name: Install necessary packages
       package:
         name: ssh-askpass
@@ -86,41 +94,6 @@
         name:
           - yarn
         update_cache: true
-
-    - name: Yarn Install Hardhat
-      ansible.builtin.shell:
-        cmd: "/usr/bin/yarn install"
-        chdir: "/app/lilypad/hardhat"
-
-    - name: Ensure the script is executable
-      ansible.builtin.file:
-        path: "/app/lilypad/stack"
-        mode: 'u+x'
-      become: true
-      become_user: lilypad
-
-    - name: Initialise Lilypad config/env file
-      ansible.builtin.shell:
-        cmd: "./stack print-env > .env"
-        chdir: "/app/lilypad"
-        creates: "/app/lilypad/.env"
-      become: true
-      become_user: lilypad
-      register: print_env_output
-      failed_when: print_env_output.rc not in [0, 1]
-
-    - name: Debug print_env command
-      ansible.builtin.debug:
-        msg: "{{ print_env_output }}"
-      when: print_env_output.failed
-
-    - name: Boot Lilypad stack
-      ansible.builtin.command:
-        cmd: "./stack boot"
-        chdir: "/app/lilypad"
-        executable: /bin/bash
-      become: true
-      become_user: lilypad
 
     - name: Find systemd unit files on Lilypad server
       ansible.builtin.find:
