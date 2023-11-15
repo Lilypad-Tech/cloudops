@@ -5,6 +5,7 @@
 
   vars:
     nodejs_version: "20.x"
+    network: "mumbai" # modify this to change the network and .env file used
 
   environment:
     PATH: "/opt/go/1.21.1/bin:{{ ansible_env.PATH }}"
@@ -17,12 +18,6 @@
     - gantsign.golang
 
   tasks:
-    - name: If we are running on an ARM64 machine, add amd64 emulation compatibility
-      ansible.builtin.command:
-        cmd: docker run --privileged --rm tonistiigi/binfmt --install amd64
-      when: ansible_architecture == "aarch64"
-      become: true
-
     - name: Create Lilypad user
       ansible.builtin.user:
         name: lilypad
@@ -61,18 +56,10 @@
       ansible.builtin.git:
         repo: https://github.com/bacalhau-project/lilypad
         dest: /app/lilypad
-        version: testnet-sepolia
+        version: main
         force: false
       become: true
       become_user: lilypad
-
-    - name: Install .env file for chosen network
-      ansible.builtin.copy:
-        src: ".env"
-        dest: /app/lilypad/.env
-        owner: lilypad
-        group: lilypad
-        mode: '0644'
 
     - name: Install necessary packages
       package:
@@ -95,6 +82,23 @@
           - yarn
         update_cache: true
 
+    - name: Yarn Install Hardhat
+      ansible.builtin.shell:
+        cmd: "/usr/bin/yarn install"
+        chdir: "/app/lilypad/hardhat"
+
+    - name: Ensure the script is executable
+      ansible.builtin.file:
+        path: "/app/lilypad/stack"
+        mode: 'u+x'
+      become: true
+      become_user: lilypad
+
+    - name: Copy file from local to remote
+      copy:
+        src: ".env.{{ network }}"
+        dest: /app/lilypad/.env
+
     - name: Find systemd unit files on Lilypad server
       ansible.builtin.find:
         paths: "/app/lilypad/ops/systemd"
@@ -110,37 +114,32 @@
       with_items: "{{ systemd_files.files }}"
       notify: Reload systemd
 
-    - name: Download Lilypad binaries
-      ansible.builtin.get_url:
-        url: "https://github.com/bacalhau-project/lilypad/releases/download/v2.0.0-6afc1cc-multiarch/lilypad-linux-{{ 'amd64' if ansible_architecture == 'x86_64' else 'arm64' if ansible_architecture == 'aarch64' else ansible_fail('Unsupported architecture') }}"
-        dest: "/usr/bin/lilypad"
-        mode: '0755'
-        owner: root
-        group: root
+    - name: Change directory to /app/lilypad and build the project
+      ansible.builtin.shell:
+        cmd: go build -buildvcs=false .
+        chdir: /app/lilypad
 
-    - name: Download Bacalhau binary archive for amd64 or arm64
+    - name: Move the Lilypad binary to /usr/bin
+      ansible.builtin.command:
+        cmd: mv /app/lilypad/lilypad /usr/bin/lilypad
+      become: yes
+
+    - name: Download Bacalhau binary archive
       ansible.builtin.get_url:
-        url: "https://github.com/bacalhau-project/bacalhau/releases/download/v1.0.3/bacalhau_v1.0.3_linux_{{ 'amd64' if ansible_architecture == 'x86_64' else 'arm64' if ansible_architecture == 'aarch64' else ansible_fail('Unsupported architecture') }}.tar.gz"
-        dest: "/tmp/bacalhau_v1.0.3_linux.tar.gz"
+        url: "https://github.com/bacalhau-project/bacalhau/releases/download/v1.0.3/bacalhau_v1.0.3_linux_amd64.tar.gz"
+        dest: "/tmp/bacalhau_v1.0.3_linux_amd64.tar.gz"
         mode: '0644'
-      when: ansible_architecture in ['x86_64', 'aarch64']
 
-    - name: Extract Bacalhau binary for amd64 or arm64
+    - name: Extract Bacalhau binary
       ansible.builtin.unarchive:
-        src: "/tmp/bacalhau_v1.0.3_linux.tar.gz"
+        src: "/tmp/bacalhau_v1.0.3_linux_amd64.tar.gz"
         dest: "/tmp/"
         remote_src: yes
-      when: ansible_architecture in ['x86_64', 'aarch64']
 
     - name: Move Bacalhau binary to /usr/bin
-      ansible.builtin.copy:
-        src: /tmp/bacalhau
-        dest: /usr/bin/bacalhau
-        remote_src: true
-        owner: root
-        group: root
-        mode: '0755'
-      become: true
+      ansible.builtin.command:
+        cmd: mv /tmp/bacalhau /usr/bin/bacalhau
+      become: yes
 
     - name: Create IPFS data directory
       ansible.builtin.file:
@@ -174,72 +173,106 @@
       set_fact:
         env_content: "{{ dot_env['content'] | b64decode }}"
 
-    - name: Extract RESOURCE_PROVIDER_PRIVATE_KEY
+    - name: Extract variables
       set_fact:
-        resource_provider_private_key: "{{ env_content | regex_findall('RESOURCE_PROVIDER_PRIVATE_KEY=([^\n\r]+)') | first }}"
+        extracted_vars:
+          resource_provider_private_key: "{{ env_content | regex_findall('RESOURCE_PROVIDER_PRIVATE_KEY=([^\n\r]+)') | first | default('') }}"
+          solver_address: "{{ env_content | regex_findall('SOLVER_ADDRESS=([^\n\r]+)') | first | default('') }}"
+          mediator_address: "{{ env_content | regex_findall('MEDIATOR_ADDRESS=([^\n\r]+)') | first | default('') }}"
+          solver_private_key: "{{ env_content | regex_findall('SOLVER_PRIVATE_KEY=([^\n\r]+)') | first | default('') }}"
+          mediator_private_key: "{{ env_content | regex_findall('MEDIATOR_PRIVATE_KEY=([^\n\r]+)') | first | default('') }}"
+          infura_key: "{{ env_content | regex_findall('INFURA_KEY=([^\n\r]+)') | first | default('') }}"
+          log_level: "{{ env_content | regex_findall('LOG_LEVEL=([^\n\r]+)') | first | default('') }}"
+          network: "{{ env_content | regex_findall('NETWORK=([^\n\r]+)') | first | default('') }}"
+          web3_rpc_url: "{{ env_content | regex_findall('WEB3_RPC_URL=([^\n\r]+)') | first | default('') }}"
+          web3_chain_id: "{{ env_content | regex_findall('WEB3_CHAIN_ID=([^\n\r]+)') | first | default('') }}"
+          web3_controller_address: "{{ env_content | regex_findall('WEB3_CONTROLLER_ADDRESS=([^\n\r]+)') | first | default('') }}"
+          web3_token_address: "{{ env_content | regex_findall('WEB3_TOKEN_ADDRESS=([^\n\r]+)') | first | default('') }}"
+          web3_mediation_address: "{{ env_content | regex_findall('WEB3_MEDIATION_ADDRESS=([^\n\r]+)') | first | default('') }}"
+          web3_jobcreator_address: "{{ env_content | regex_findall('WEB3_JOBCREATOR_ADDRESS=([^\n\r]+)') | first | default('') }}"
+          web3_payments_address: "{{ env_content | regex_findall('WEB3_PAYMENTS_ADDRESS=([^\n\r]+)') | first | default('') }}"
+          web3_storage_address: "{{ env_content | regex_findall('WEB3_STORAGE_ADDRESS=([^\n\r]+)') | first | default('') }}"
+          web3_users_address: "{{ env_content | regex_findall('WEB3_USERS_ADDRESS=([^\n\r]+)') | first | default('') }}"
+          server_url: "{{ env_content | regex_findall('SERVER_URL=([^\n\r]+)') | first | default('') }}"
+          server_port: "{{ env_content | regex_findall('SERVER_PORT=([^\n\r]+)') | first | default('') }}"
+          directory_address: "{{ env_content | regex_findall('DIRECTORY_ADDRESS=([^\n\r]+)') | first | default('') }}"
+          job_creator_address: "{{ env_content | regex_findall('JOB_CREATOR_ADDRESS=([^\n\r]+)') | first | default('') }}"
+          bacalhau_api_host: "{{ env_content | regex_findall('BACALHAU_API_HOST=([^\n\r]+)') | first | default('') }}"
 
-    - name: Extract SOLVER_ADDRESS
-      set_fact:
-        solver_address: "{{ env_content | regex_findall('SOLVER_ADDRESS=([^\n\r]+)') | first }}"
-
-    - name: Extract MEDIATOR_ADDRESS
-      set_fact:
-        mediator_address: "{{ env_content | regex_findall('MEDIATOR_ADDRESS=([^\n\r]+)') | first }}"
-
-    - name: Save RESOURCE_PROVIDER_PRIVATE_KEY
+    - name: Save resource-provider.env
       ansible.builtin.copy:
         dest: /app/lilypad/resource-provider.env
         content: |
-          WEB3_PRIVATE_KEY={{ resource_provider_private_key }}
-          SERVICE_SOLVER={{ solver_address }}
-          SERVICE_MEDIATORS={{ mediator_address }}
+          WEB3_PRIVATE_KEY={{ extracted_vars.resource_provider_private_key }}
+          SERVICE_SOLVER={{ extracted_vars.solver_address }}
+          SERVICE_MEDIATORS={{ extracted_vars.mediator_address }}
+          WEB3_RPC_URL={{ extracted_vars.web3_rpc_url }}
+          WEB3_CHAIN_ID={{ extracted_vars.web3_chain_id }}
+          WEB3_CONTROLLER_ADDRESS={{ extracted_vars.web3_controller_address }}
+          WEB3_TOKEN_ADDRESS={{ extracted_vars.web3_token_address }}
+          WEB3_MEDIATION_ADDRESS={{ extracted_vars.web3_mediation_address }}
+          WEB3_JOBCREATOR_ADDRESS={{ extracted_vars.web3_jobcreator_address }}
+          WEB3_PAYMENTS_ADDRESS={{ extracted_vars.web3_payments_address }}
+          WEB3_STORAGE_ADDRESS={{ extracted_vars.web3_storage_address }}
+          WEB3_USERS_ADDRESS={{ extracted_vars.web3_users_address }}
+          WEB3_INFURA_KEY={{ extracted_vars.infura_key }}
+          WEB3_CHAIN_ID={{ extracted_vars.web3_chain_id }}
+          WEB3_USERS_ADDRESS={{ extracted_vars.web3_users_address }}
+          BACAHLAU_API_HOST={{ extracted_vars.bacalhau_api_host }}
+          JOB_CREATOR_ADDRESS={{ extracted_vars.job_creator_address }}
         owner: lilypad
         group: lilypad
         mode: '0644'
 
-    - name: Extract MEDIATOR_PRIVATE_KEY
-      set_fact:
-        mediator_private_key: "{{ env_content | regex_findall('MEDIATOR_PRIVATE_KEY=([^\n\r]+)') | first }}"
-
-    - name: Extract DIRECTORY_ADDRESS
-      set_fact:
-        directory_address: "{{ env_content | regex_findall('DIRECTORY_ADDRESS=([^\n\r]+)') | first }}"
-
-    - name: Extract SOLVER_ADDRESS
-      set_fact:
-        solver_address: "{{ env_content | regex_findall('SOLVER_ADDRESS=([^\n\r]+)') | first }}"
-
-    - name: Save MEDIDATOR_PRIVATE_KEY
+    - name: Save mediator.env with additional variables
       ansible.builtin.copy:
         dest: /app/lilypad/mediator.env
         content: |
-          WEB3_PRIVATE_KEY={{ mediator_private_key }}
-          WEB3_DIRECTORY_ADDRESS={{ directory_address }}
-          SERVICE_SOLVER={{ solver_address }}
+          WEB3_PRIVATE_KEY={{ extracted_vars.mediator_private_key }}
+          WEB3_DIRECTORY_ADDRESS={{ extracted_vars.directory_address }}
+          SERVICE_SOLVER={{ extracted_vars.solver_address }}
+          WEB3_RPC_URL={{ extracted_vars.web3_rpc_url }}
+          WEB3_CHAIN_ID={{ extracted_vars.web3_chain_id }}
+          WEB3_CONTROLLER_ADDRESS={{ extracted_vars.web3_controller_address }}
+          WEB3_TOKEN_ADDRESS={{ extracted_vars.web3_token_address }}
+          WEB3_MEDIATION_ADDRESS={{ extracted_vars.web3_mediation_address }}
+          WEB3_JOBCREATOR_ADDRESS={{ extracted_vars.web3_jobcreator_address }}
+          WEB3_PAYMENTS_ADDRESS={{ extracted_vars.web3_payments_address }}
+          WEB3_STORAGE_ADDRESS={{ extracted_vars.web3_storage_address }}
+          WEB3_USERS_ADDRESS{{ extracted_vars.web3_users_address }}
+          WEB3_INFURA_KEY={{ extracted_vars.infura_key }}
+          WEB3_CHAIN_ID={{ extracted_vars.web3_chain_id }}
+          WEB3_USERS_ADDRESS={{ extracted_vars.web3_users_address }}
+          JOB_CREATOR_ADDRESS={{ extracted_vars.job_creator_address }}
         owner: lilypad
         group: lilypad
         mode: '0644'
 
-    - name: Extract SOLVER_PRIVATE_KEY
-      set_fact:
-        solver_private_key: "{{ env_content | regex_findall('SOLVER_PRIVATE_KEY=([^\n\r]+)') | first }}"
-        
-    - name: Extract JOB_CREATOR_ADDRESS
-      set_fact:
-        job_creator_address: "{{ env_content | regex_findall('JOB_CREATOR_ADDRESS=([^\n\r]+)') | first }}"
-
-    - name: Save SOLVER_PRIVATE_KEY with additional variables
+    - name: Save solver.env with additional variables
       ansible.builtin.copy:
         dest: /app/lilypad/solver.env
         content: |
-          WEB3_PRIVATE_KEY={{ solver_private_key }}
-          JOB_CREATOR_ADDRESS={{ job_creator_address }}
-          SERVICE_MEDIATORS={{ mediator_address }}
-          WEB3_CHAIN_ID=11155111
-          WEB3_CONTROLLER_ADDRESS=0x433C91FA54b9c11550b07672E1FA2b06860e5b05
+          WEB3_PRIVATE_KEY={{ extracted_vars.solver_private_key }}
+          JOB_CREATOR_ADDRESS={{ extracted_vars.job_creator_address }}
+          SERVICE_MEDIATORS={{ extracted_vars.mediator_address }}
+          SERVER_URL={{ extracted_vars.server_url }}
+          SERVER_PORT={{ extracted_vars.server_port }}
+          WEB3_RPC_URL={{ extracted_vars.web3_rpc_url }}
+          WEB3_CHAIN_ID={{ extracted_vars.web3_chain_id }}
+          WEB3_CONTROLLER_ADDRESS={{ extracted_vars.web3_controller_address }}
+          WEB3_TOKEN_ADDRESS={{ extracted_vars.web3_token_address }}
+          WEB3_MEDIATION_ADDRESS={{ extracted_vars.web3_mediation_address }}
+          WEB3_JOBCREATOR_ADDRESS={{ extracted_vars.web3_jobcreator_address }}
+          WEB3_PAYMENTS_ADDRESS={{ extracted_vars.web3_payments_address }}
+          WEB3_STORAGE_ADDRESS={{ extracted_vars.web3_storage_address }}
+          WEB3_USERS_ADDRESS{{ extracted_vars.web3_users_address }}
+          WEB3_INFURA_KEY={{ extracted_vars.infura_key }}
+          WEB3_CHAIN_ID={{ extracted_vars.web3_chain_id }}
+          WEB3_USERS_ADDRESS={{ extracted_vars.web3_users_address }}
         owner: lilypad
         group: lilypad
         mode: '0644'
+
 
     - name: Start Solver service
       ansible.builtin.systemd:
@@ -263,4 +296,3 @@
     - name: Reload systemd
       ansible.builtin.systemd:
         daemon_reload: yes
-
