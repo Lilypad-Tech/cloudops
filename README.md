@@ -1,6 +1,6 @@
 # CloudOps: Lilypad Infrastructure Deployment Using Ansible
 
-This guide provides instructions for deploying the Lilypad infrastructure on arbitrary Debian-based nodes using Ansible.
+This guide provides instructions for deploying the Lilypad infrastructure on arbitrary Debian-based nodes using Ansible. Minimum requirements: quad-core cpu, and an nvidia gpu
 
 ## Prerequisites
 
